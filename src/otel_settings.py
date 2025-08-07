@@ -1,29 +1,35 @@
 """OpenTelemetry設定とトレース・ログ管理"""
 
-import platform
-import socket
-import sys
-
-import discord
-from opentelemetry_instrumentation_discordpy import DiscordPyInstrumentor
-
 import os
-from opentelemetry import trace, _logs
-from opentelemetry.sdk.resources import Resource, ResourceDetector
+from opentelemetry.sdk.resources import Resource
 
+from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 
-import logging
-import datetime
-from opentelemetry.sdk._logs import LoggerProvider, LoggingHandler
-from opentelemetry.sdk._logs.export import ConsoleLogExporter
+from opentelemetry import _logs
+from opentelemetry.sdk._logs import LoggerProvider
 from opentelemetry.sdk._logs.export import BatchLogRecordProcessor
+from opentelemetry.sdk._logs.export import ConsoleLogExporter
+import datetime
 from opentelemetry.exporter.otlp.proto.grpc._log_exporter import OTLPLogExporter
 
+from opentelemetry import metrics
+from opentelemetry.sdk.metrics import MeterProvider
+from opentelemetry.sdk.metrics.export import (
+    MetricExporter,
+    PeriodicExportingMetricReader,
+)
+from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 
-def setup_dc_telemetry(client: discord.Client):
+import platform
+import socket
+import sys
+from opentelemetry.sdk.resources import ResourceDetector
+
+
+def otel_providers_init() -> None:
     """OpenTelemetryの初期化とトレース・ログ設定"""
 
     # 環境変数から設定値を取得
@@ -31,10 +37,9 @@ def setup_dc_telemetry(client: discord.Client):
     otlp_tls = os.getenv("OTLP_TLS", "false")
     service_name = os.getenv("SERVICE_NAME", "discord-bot")
     service_version = os.getenv("SERVICE_VERSION", "1.0.0")
-    log_level = getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO)
 
     # システムのリソース情報を付与
-    resource = SystemResourceDetector().detect()
+    resource = SystemResource().detect()
 
     # サービスのリソース情報の設定
     service_resource = Resource.create(
@@ -47,13 +52,9 @@ def setup_dc_telemetry(client: discord.Client):
     trace.set_tracer_provider(tracer_provider)
 
     # OTLP Span Exporterの設定（外部Collectorに送信）
-    try:
-        otlp_span_exporter = OTLPSpanExporter(endpoint=otlp_url, insecure=otlp_tls)
-        span_processor = BatchSpanProcessor(otlp_span_exporter)
-        tracer_provider.add_span_processor(span_processor)
-    except Exception as e:
-        print(f"警告: OTLP Span Exporterの設定に失敗しました: {e}")
-        print("トレースデータはローカルでのみ処理されます")
+    otlp_span_exporter = OTLPSpanExporter(endpoint=otlp_url, insecure=otlp_tls)
+    span_processor = BatchSpanProcessor(otlp_span_exporter)
+    tracer_provider.add_span_processor(span_processor)
 
     # LoggerProviderの設定
     logger_provider = LoggerProvider(resource=resource)
@@ -68,43 +69,26 @@ def setup_dc_telemetry(client: discord.Client):
     logger_provider.add_log_record_processor(console_log_processor)
 
     # OTLP Log Exporterの設定（外部Collectorに送信）
-    try:
-        otlp_log_exporter = OTLPLogExporter(endpoint=otlp_url, insecure=otlp_tls)
-        log_processor = BatchLogRecordProcessor(otlp_log_exporter)
-        logger_provider.add_log_record_processor(log_processor)
-    except Exception as e:
-        print(f"警告: OTLP Log Exporterの設定に失敗しました: {e}")
-        print("ログはコンソールでのみ出力されます")
+    otlp_log_exporter = OTLPLogExporter(endpoint=otlp_url, insecure=otlp_tls)
+    log_processor = BatchLogRecordProcessor(otlp_log_exporter)
+    logger_provider.add_log_record_processor(log_processor)
 
-    # OpenTelemetryのログハンドラーを設定
-    handler = LoggingHandler(level=logging.NOTSET, logger_provider=logger_provider)
+    # OTLP Metrics Exporterの設定（外部Collectorに送信）
+    otlp_metrics_exporter = OTLPMetricExporter(endpoint=otlp_url, insecure=otlp_tls)
 
-    # ログ設定（OpenTelemetryハンドラーのみ使用）
-    logging.basicConfig(
-        level=log_level,
-        format="%(name)s - %(message)s",
-        handlers=[
-            handler,  # OpenTelemetryハンドラー（Console + OTLP出力）
-        ],
+    # MetricReaderの設定（60秒間隔でメトリクスをエクスポート）
+    metric_reader = PeriodicExportingMetricReader(
+        exporter=otlp_metrics_exporter, export_interval_millis=60000  # 60秒間隔
     )
 
-    # ライブラリ計装の設定
-    try:
-        DiscordPyInstrumentor().instrument(client=client)
-    except Exception as e:
-        print(f"警告: Discord.py計装の設定に失敗しました: {e}")
+    # MeterProviderの設定
+    meter_provider = MeterProvider(resource=resource, metric_readers=[metric_reader])
+    metrics.set_meter_provider(meter_provider)
 
-    print(f"OpenTelemetry設定完了 URL:{otlp_url}, TLS:{otlp_tls}")
-
-    return trace.get_tracer(__name__)
+    print(f"OpenTelemetry Provider設定終了 URL:{otlp_url}, TLS:{otlp_tls}")
 
 
-def get_logger(name: str):
-    """ロガーの取得"""
-    return logging.getLogger(name)
-
-
-class SystemResourceDetector(ResourceDetector):
+class SystemResource(ResourceDetector):
     """
     platformとsocketを使い、ホストとOSの情報を検出するクラス
     """

@@ -1,9 +1,14 @@
+# Discord Bot
 discord.py==2.4.0
+python-dotenv==1.1.1
+
+# OpenTelemetry Core
 opentelemetry-api==1.35.0
-opentelemetry-exporter-otlp-proto-common==1.35.0
-opentelemetry-exporter-otlp-proto-grpc==1.35.0
-opentelemetry-instrumentation==0.56b0
-opentelemetry-proto==1.35.0
 opentelemetry-sdk==1.35.0
-opentelemetry-semantic-conventions==0.56b0
+
+# OpenTelemetry Instrumentation
+opentelemetry-instrumentation-logging==0.56b0
 opentelemetry_instrumentation_discordpy==0.1.33
+
+# OpenTelemetry Exporters
+opentelemetry-exporter-otlp-proto-grpc==1.35.0

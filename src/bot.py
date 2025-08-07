@@ -1,45 +1,58 @@
 import discord
 import os
-from discord_telemetry import setup_dc_telemetry, get_logger
-from opentelemetry_instrumentation_discordpy.decorators import trace
+import logging
+from dotenv import load_dotenv
 
-# ボットの設定
+from otel_settings import otel_providers_init
+from opentelemetry.instrumentation.logging import LoggingInstrumentor
+from opentelemetry_instrumentation_discordpy import DiscordPyInstrumentor
+from opentelemetry_instrumentation_discordpy.decorators import trace as trace_on
+
+
+# 環境変数の読み込み
+load_dotenv(os.path.join(os.path.dirname(__file__), "../.env"))
+
+# 標準ロガーの初期化
+logger = logging.getLogger(__name__)
+logging.getLogger().setLevel(logging.INFO)
+
+# OpenTelemetryの初期化
+otel_providers_init()
+
+# 標準ロガーのライブラリ計装(log)
+LoggingInstrumentor().instrument()
+
+# ボットの初期化
 intents = discord.Intents.all()
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
-
-# OpenTelemetryの初期化
-tracer = setup_dc_telemetry(client)
-logger = get_logger(__name__)
+# Discord.pyのライブラリ計装(trace, metrics)
+DiscordPyInstrumentor().instrument(client=client)
 
 
 @client.event
 async def on_ready():
-    logger.info(f"{client.user} としてログインしました！")
+    logger.info(f"Discord botにログインしました。{str(client.user.id)}")
     synced = await tree.sync()
-    logger.info(f"{len(synced)}個のグローバルスラッシュコマンドを同期しました")
+    logger.info(f"スラッシュコマンドを同期しました。{len(synced)}")
 
 
 @tree.command(name="hello", description="挨拶をします")
 async def hello(interaction: discord.Interaction):
-    logger.info(f"helloコマンドが実行されました - ユーザー: {interaction.user}")
     response_message = f"こんにちは、{interaction.user.mention}さん"
     await interaction.response.send_message(response_message)
-    logger.info(f"helloコマンドの応答を送信しました - ユーザー: {interaction.user}")
 
 
 @tree.command(name="ping", description="ボットの応答時間を表示")
 async def ping(interaction: discord.Interaction):
-    logger.info(f"pingコマンドが実行されました - ユーザー: {interaction.user}")
-
+    latency_ms = round(client.latency * 1000)
     await interaction.response.send_message(
-        msg_res(f"Pong! レイテンシ: {round(client.latency * 1000)}ms")
+        msg_res(f"Pong! レイテンシ: {latency_ms}ms")
     )
-    logger.info(f"pingコマンドの応答を送信しました - ユーザー: {interaction.user}")
 
 
-@trace
+@trace_on
 def msg_res(text):
     return text
 
